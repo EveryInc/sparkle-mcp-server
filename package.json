@@ -1,0 +1,50 @@
+{
+  "name": "@every/sparkle-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for secure Sparkle folder file access with Claude AI",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "sparkle-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "ai",
+    "file-search",
+    "sparkle",
+    "every"
+  ],
+  "author": "Every Inc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EveryInc/sparkle-mcp-server.git"
+  },
+  "homepage": "https://github.com/EveryInc/sparkle-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/EveryInc/sparkle-mcp-server/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.8.0",
+    "@vscode/ripgrep": "^1.15.9",
+    "chokidar": "^3.5.3",
+    "zod": "^3.24.1",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

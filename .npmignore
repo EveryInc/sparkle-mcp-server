@@ -1,0 +1,22 @@
+# Source files (users get built JS)
+src/
+tsconfig.json
+*.ts
+!*.d.ts
+
+# Development files
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Tests and docs
+test/
+tests/
+*.test.js
+*.spec.js
+
+# Build tools
+tsconfig.json
+.eslintrc*
+.prettierrc*
