@@ -235,6 +235,8 @@ export class SparkleFolder {
       await this.waitForIndex();
     }
 
+    console.error(`Finding relevant files for query: "${query}", fileIndex size: ${this.fileIndex.size}`);
+
     const queryEmbedding = await this.generateEmbedding({
       name: query,
       content: query,
@@ -258,6 +260,8 @@ export class SparkleFolder {
         metadata,
       });
     }
+
+    console.error(`Found ${results.length} results before sorting`);
 
     // Sort by relevance and return top results
     return results
@@ -336,5 +340,9 @@ export class SparkleFolder {
     if (this.watcher) {
       await this.watcher.close();
     }
+  }
+
+  public getFileCount(): number {
+    return this.fileIndex.size;
   }
 }

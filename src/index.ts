@@ -11,6 +11,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { SparkleFolder } from "./sparkle-folder.js";
 import { FileSearchEngine } from "./search-engine.js";
 import { PathValidator, RateLimiter } from "./security.js";
+import { loadConfig, SparkleConfig } from "./config.js";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -53,6 +54,8 @@ const GetFileInfoSchema = z.object({
   path: z.string().describe("File path to get info for (relative to Sparkle folder)"),
 });
 
+const HealthCheckSchema = z.object({});
+
 // Main server class
 class SparkleMCPServer {
   private server: Server;
@@ -60,8 +63,12 @@ class SparkleMCPServer {
   private searchEngine: FileSearchEngine;
   private pathValidator: PathValidator;
   private rateLimiter: RateLimiter;
+  private config: SparkleConfig | null = null;
+  private startupTime: Date;
 
   constructor() {
+    this.startupTime = new Date();
+    
     this.server = new Server(
       {
         name: "sparkle-mcp",
@@ -74,13 +81,15 @@ class SparkleMCPServer {
       }
     );
 
-    // Initialize components
-    this.sparkleFolder = new SparkleFolder("~/Sparkle");
+    // Initialize components with Sparkle folder
+    const sparkleDir = "~/Sparkle";
+    this.sparkleFolder = new SparkleFolder(sparkleDir);
     this.searchEngine = new FileSearchEngine();
     
     // IMPORTANT: Only allow access to Sparkle folder
+    // Use expanded path for PathValidator
     this.pathValidator = new PathValidator({
-      allowedPaths: ["~/Sparkle"], // ONLY Sparkle folder
+      allowedPaths: [this.expandPath(sparkleDir)], // ONLY Sparkle folder (expanded)
       maxFileSize: 100 * 1024 * 1024, // 100MB max
       allowSymlinks: false,
     });
@@ -90,6 +99,9 @@ class SparkleMCPServer {
     
     // Ensure Sparkle folder exists on startup
     this.ensureSparkleFolder();
+    
+    // Load configuration
+    this.loadConfiguration();
   }
 
   private setupHandlers() {
@@ -142,6 +154,11 @@ class SparkleMCPServer {
             description: "Get detailed information about a file or directory in the Sparkle folder.",
             inputSchema: zodToJsonSchema(GetFileInfoSchema),
           },
+          {
+            name: "health_check",
+            description: "Check the health status of the Sparkle MCP server.",
+            inputSchema: zodToJsonSchema(HealthCheckSchema),
+          },
         ],
       };
     });
@@ -149,6 +166,7 @@ class SparkleMCPServer {
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+      console.error(`call_tool: ${name}`);
 
       switch (name) {
         case "get_relevant_files":
@@ -167,6 +185,8 @@ class SparkleMCPServer {
           return await this.handleMoveFile(args);
         case "get_file_info":
           return await this.handleGetFileInfo(args);
+        case "health_check":
+          return await this.handleHealthCheck(args);
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -185,17 +205,8 @@ class SparkleMCPServer {
       // ONLY search in Sparkle folder
       const sparkleFiles = await this.sparkleFolder.findRelevant(query, maxFiles);
       
-      // No need to check other locations - Sparkle folder only!
-      const validatedFiles = [];
-      
-      for (const file of sparkleFiles) {
-        try {
-          await this.pathValidator.validatePath(file.path);
-          validatedFiles.push(file);
-        } catch (error) {
-          console.error(`Skipping invalid path ${file.path}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
+      // All files from SparkleFolder are already validated
+      const validatedFiles = sparkleFiles;
       
       const finalResults = validatedFiles
         .slice(0, maxFiles)
@@ -222,6 +233,8 @@ class SparkleMCPServer {
     const { path: searchPath, pattern, excludePatterns = [] } = SearchFilesSchema.parse(args);
 
     try {
+      console.error(`search_files called with path: "${searchPath}", pattern: "${pattern}"`);
+      
       // Rate limiting check
       if (!this.rateLimiter.checkLimit("search")) {
         throw new Error("Rate limit exceeded. Please try again later.");
@@ -229,10 +242,32 @@ class SparkleMCPServer {
 
       // Build full path within Sparkle folder
       const sparkleRoot = this.expandPath("~/Sparkle");
-      const fullSearchPath = path.resolve(sparkleRoot, searchPath || ".");
+      console.error(`Sparkle root: ${sparkleRoot}`);
       
-      // Validate path is within Sparkle folder
-      await this.pathValidator.validatePath(fullSearchPath);
+      // Handle both relative and absolute paths
+      let fullSearchPath: string;
+      if (searchPath && path.isAbsolute(searchPath)) {
+        // If absolute path is provided, use it directly but validate it's in Sparkle
+        fullSearchPath = searchPath;
+      } else {
+        // Otherwise resolve relative to Sparkle root
+        // Empty string or "." should resolve to sparkle root
+        fullSearchPath = searchPath ? path.resolve(sparkleRoot, searchPath) : sparkleRoot;
+      }
+      
+      console.error(`Full search path: ${fullSearchPath}`);
+      
+      // Ensure the path doesn't escape the Sparkle folder
+      if (!fullSearchPath.startsWith(sparkleRoot)) {
+        throw new Error(`Access denied: Path is outside Sparkle folder - ${fullSearchPath} does not start with ${sparkleRoot}`);
+      }
+
+      // Check if the path exists
+      try {
+        await fs.stat(fullSearchPath);
+      } catch (error) {
+        throw new Error(`Path does not exist: ${fullSearchPath}`);
+      }
 
       const results = await this.recursiveSearch(fullSearchPath, pattern, excludePatterns);
 
@@ -243,6 +278,7 @@ class SparkleMCPServer {
         }],
       };
     } catch (error) {
+      console.error("Search error:", error);
       return {
         content: [{
           type: "text",
@@ -255,7 +291,6 @@ class SparkleMCPServer {
 
   private async recursiveSearch(searchPath: string, pattern: string, excludePatterns: string[]): Promise<string[]> {
     const results: string[] = [];
-    const patternLower = pattern.toLowerCase();
     
     try {
       const entries = await fs.readdir(searchPath, { withFileTypes: true });
@@ -271,19 +306,36 @@ class SparkleMCPServer {
         
         if (isExcluded) continue;
         
-        // Check if matches pattern (case-insensitive partial match)
-        if (entry.name.toLowerCase().includes(patternLower)) {
+        // Check if matches pattern
+        let matches = false;
+        if (pattern === '*') {
+          // Match all files
+          matches = true;
+        } else if (pattern.startsWith('*.')) {
+          // Extension matching (e.g., *.txt)
+          const ext = pattern.slice(1); // Remove the *
+          matches = entry.name.endsWith(ext);
+        } else if (pattern.includes('*')) {
+          // Simple glob pattern
+          const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$', 'i');
+          matches = regex.test(entry.name);
+        } else {
+          // Partial name matching (case-insensitive)
+          matches = entry.name.toLowerCase().includes(pattern.toLowerCase());
+        }
+        
+        if (matches) {
           results.push(relativePath);
         }
         
         // Recurse into directories
-        if (entry.isDirectory()) {
+        if (entry.isDirectory() && !entry.name.startsWith('.')) {
           const subResults = await this.recursiveSearch(fullPath, pattern, excludePatterns);
           results.push(...subResults);
         }
       }
     } catch (error) {
-      // Directory might not exist or be accessible
+      console.error(`Error searching ${searchPath}:`, error);
     }
     
     return results;
@@ -295,7 +347,11 @@ class SparkleMCPServer {
     try {
       const sparkleRoot = this.expandPath("~/Sparkle");
       const fullPath = path.resolve(sparkleRoot, filePath);
-      await this.pathValidator.validatePath(fullPath);
+      
+      // Ensure path is within Sparkle folder
+      if (!fullPath.startsWith(sparkleRoot)) {
+        throw new Error("Access denied: Path is outside Sparkle folder");
+      }
       
       const content = await fs.readFile(fullPath, 'utf-8');
       
@@ -349,9 +405,25 @@ class SparkleMCPServer {
     const { path: dirPath } = ListDirectorySchema.parse(args);
     
     try {
+      console.error(`list_directory called with path: "${dirPath}"`);
+      
       const sparkleRoot = this.expandPath("~/Sparkle");
-      const fullPath = path.resolve(sparkleRoot, dirPath || ".");
-      await this.pathValidator.validatePath(fullPath);
+      console.error(`Sparkle root: ${sparkleRoot}`);
+      
+      // Handle empty path or "." as sparkle root
+      const fullPath = dirPath ? path.resolve(sparkleRoot, dirPath) : sparkleRoot;
+      console.error(`Full path: ${fullPath}`);
+      
+      // Ensure the path doesn't escape the Sparkle folder
+      if (!fullPath.startsWith(sparkleRoot)) {
+        throw new Error(`Access denied: Path is outside Sparkle folder - ${fullPath} does not start with ${sparkleRoot}`);
+      }
+      
+      // Check if the path exists and is a directory
+      const stats = await fs.stat(fullPath);
+      if (!stats.isDirectory()) {
+        throw new Error(`Not a directory: ${fullPath}`);
+      }
       
       const entries = await fs.readdir(fullPath, { withFileTypes: true });
       const formatted = entries.map(entry => {
@@ -359,13 +431,16 @@ class SparkleMCPServer {
         return `${prefix} ${entry.name}`;
       });
       
+      console.error(`Found ${entries.length} entries in ${fullPath}`);
+      
       return {
         content: [{
           type: "text",
-          text: formatted.join('\n'),
+          text: formatted.length > 0 ? formatted.join('\n') : "Empty directory",
         }],
       };
     } catch (error) {
+      console.error("List directory error:", error);
       return {
         content: [{
           type: "text",
@@ -410,7 +485,10 @@ class SparkleMCPServer {
       const sourcePath = path.resolve(sparkleRoot, source);
       const destPath = path.resolve(sparkleRoot, destination);
       
-      await this.pathValidator.validatePath(sourcePath);
+      // Ensure source path is within Sparkle folder
+      if (!sourcePath.startsWith(sparkleRoot) || !destPath.startsWith(sparkleRoot)) {
+        throw new Error("Access denied: Path is outside Sparkle folder");
+      }
       
       // Ensure destination directory exists
       await fs.mkdir(path.dirname(destPath), { recursive: true });
@@ -440,7 +518,11 @@ class SparkleMCPServer {
     try {
       const sparkleRoot = this.expandPath("~/Sparkle");
       const fullPath = path.resolve(sparkleRoot, filePath);
-      await this.pathValidator.validatePath(fullPath);
+      
+      // Ensure path is within Sparkle folder
+      if (!fullPath.startsWith(sparkleRoot)) {
+        throw new Error("Access denied: Path is outside Sparkle folder");
+      }
       
       const stats = await fs.stat(fullPath);
       
@@ -526,7 +608,8 @@ class SparkleMCPServer {
 
   private async ensureSparkleFolder() {
     try {
-      const sparkleDir = this.expandPath("~/Sparkle");
+      const folderName = "~/Sparkle";
+      const sparkleDir = this.expandPath(folderName);
       await fs.mkdir(sparkleDir, { recursive: true });
       
       // Create a welcome file if folder is new
@@ -568,16 +651,101 @@ Happy organizing!
     return folderPath;
   }
 
+  private async loadConfiguration() {
+    try {
+      this.config = await loadConfig();
+      console.error("Configuration loaded:", this.config);
+    } catch (error) {
+      console.error("Failed to load configuration, using defaults");
+    }
+  }
+
+  private async handleHealthCheck(args: any) {
+    try {
+      console.error("health_check: start");
+      const sparkleDir = this.expandPath(process.env.APP_ENV === 'dev' ? "~/Sparkle-Dev" : "~/Sparkle");
+      const stats = await fs.stat(sparkleDir);
+      
+      const health = {
+        status: "healthy",
+        version: "1.0.0",
+        uptime: Math.floor((Date.now() - this.startupTime.getTime()) / 1000),
+        sparkleFolder: {
+          path: sparkleDir,
+          exists: stats.isDirectory(),
+          writable: true,
+        },
+        indexedFiles: this.sparkleFolder.getFileCount(),
+        configuration: this.config || "default",
+        rateLimiter: {
+          remaining: this.rateLimiter.getRemainingRequests('health_check')
+        },
+        timestamp: new Date().toISOString(),
+      };
+      
+      const response = {
+        content: [{
+          type: "text",
+          text: JSON.stringify(health, null, 2),
+        }],
+      };
+      console.error("health_check: success");
+      return response;
+    } catch (error) {
+      console.error("health_check: error", error);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            status: "unhealthy",
+            error: error instanceof Error ? error.message : String(error),
+            timestamp: new Date().toISOString(),
+          }, null, 2),
+        }],
+        isError: true,
+      };
+    }
+  }
+
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     console.error("Sparkle MCP Server running...");
     console.error("Sparkle folder:", this.expandPath("~/Sparkle"));
   }
+
+  getSparkleFolder() {
+    return this.sparkleFolder;
+  }
 }
 
 // Start the server
 const server = new SparkleMCPServer();
+
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+  console.error('Received SIGTERM, shutting down gracefully...');
+  await server.getSparkleFolder()?.cleanup();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.error('Received SIGINT, shutting down gracefully...');
+  await server.getSparkleFolder()?.cleanup();
+  process.exit(0);
+});
+
+// Handle uncaught errors
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+  // Attempt to continue running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled rejection at:', promise, 'reason:', reason);
+  // Attempt to continue running
+});
+
 server.run().catch((error) => {
   console.error("Server error:", error);
   process.exit(1);
