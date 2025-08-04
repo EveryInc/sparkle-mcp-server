@@ -353,14 +353,33 @@ class SparkleMCPServer {
         throw new Error("Access denied: Path is outside Sparkle folder");
       }
       
-      const content = await fs.readFile(fullPath, 'utf-8');
+      // Check file extension to determine if it's binary
+      const ext = path.extname(fullPath).toLowerCase();
+      const binaryExtensions = ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.tiff', '.webp', '.svg', '.mp3', '.mp4', '.wav', '.mov', '.avi', '.zip', '.tar', '.gz', '.7z', '.rar'];
+      const isBinary = binaryExtensions.includes(ext);
       
-      return {
-        content: [{
-          type: "text", 
-          text: content,
-        }],
-      };
+      if (isBinary) {
+        // Read as binary and return base64
+        const buffer = await fs.readFile(fullPath);
+        const base64 = buffer.toString('base64');
+        
+        return {
+          content: [{
+            type: "text",
+            text: `[Binary file: ${ext}]\nSize: ${buffer.length} bytes\nBase64 encoding:\n${base64}`,
+          }],
+        };
+      } else {
+        // Read as text
+        const content = await fs.readFile(fullPath, 'utf-8');
+        
+        return {
+          content: [{
+            type: "text", 
+            text: content,
+          }],
+        };
+      }
     } catch (error) {
       return {
         content: [{

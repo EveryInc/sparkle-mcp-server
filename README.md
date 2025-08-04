@@ -25,7 +25,7 @@ Add to your Claude Desktop configuration:
   "mcpServers": {
     "sparkle": {
       "command": "npx",
-      "args": ["-y", "@every/sparkle-mcp-server"]
+      "args": ["-y", "@every-env/sparkle-mcp-server"]
     }
   }
 }

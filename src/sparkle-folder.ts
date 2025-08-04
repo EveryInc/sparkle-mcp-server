@@ -132,7 +132,7 @@ export class SparkleFolder {
     if (this.isTextFile(ext)) {
       try {
         const content = await fs.readFile(filePath, "utf-8");
-        metadata.content = content.slice(0, 5000); // First 5KB
+        metadata.content = content.slice(0, 50000); // First 50KB for indexing
         metadata.summary = this.generateSummary(content);
       } catch (error) {
         console.error(`Error reading ${filePath}:`, error);
