@@ -1,11 +1,14 @@
 {
   "name": "@every-env/sparkle-mcp-server",
   "version": "1.0.0",
-  "description": "MCP server for secure Sparkle folder file access with Claude AI",
+  "description": "MCP server for secure Sparkle folder file access with Claude AI, including clipboard history support",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "sparkle-mcp": "dist/index.js"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   },
   "scripts": {
     "build": "tsc",
@@ -27,7 +30,11 @@
     "ai",
     "file-search",
     "sparkle",
-    "every"
+    "every",
+    "clipboard",
+    "clipboard-history",
+    "pasteboard",
+    "file-management"
   ],
   "author": "Every Inc",
   "license": "MIT",
