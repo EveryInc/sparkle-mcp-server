@@ -12,6 +12,7 @@ import { SparkleFolder } from "./sparkle-folder.js";
 import { FileSearchEngine } from "./search-engine.js";
 import { PathValidator, RateLimiter } from "./security.js";
 import { loadConfig, SparkleConfig } from "./config.js";
+import { ClipboardHistoryManager } from "./clipboard-history.js";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -56,6 +57,26 @@ const GetFileInfoSchema = z.object({
 
 const HealthCheckSchema = z.object({});
 
+// Clipboard schemas
+const SearchClipboardSchema = z.object({
+  query: z.string().optional().describe("Text to search for in clipboard history"),
+  startDate: z.string().optional().describe("Start date (YYYY-MM-DD) for search range"),
+  endDate: z.string().optional().describe("End date (YYYY-MM-DD) for search range"),
+  type: z.string().optional().describe("Type of clipboard entry (text, url, image, file-path)"),
+  limit: z.number().optional().default(50).describe("Maximum number of entries to return"),
+});
+
+const GetClipboardByDateSchema = z.object({
+  date: z.string().describe("Date (YYYY-MM-DD) to get clipboard entries for"),
+});
+
+const GetRecentClipboardSchema = z.object({
+  days: z.number().optional().default(7).describe("Number of days to look back"),
+  limit: z.number().optional().default(50).describe("Maximum number of entries to return"),
+});
+
+const ClipboardStatsSchema = z.object({});
+
 // Main server class
 class SparkleMCPServer {
   private server: Server;
@@ -63,6 +84,7 @@ class SparkleMCPServer {
   private searchEngine: FileSearchEngine;
   private pathValidator: PathValidator;
   private rateLimiter: RateLimiter;
+  private clipboardHistory: ClipboardHistoryManager;
   private config: SparkleConfig | null = null;
   private startupTime: Date;
 
@@ -85,6 +107,7 @@ class SparkleMCPServer {
     const sparkleDir = "~/Sparkle";
     this.sparkleFolder = new SparkleFolder(sparkleDir);
     this.searchEngine = new FileSearchEngine();
+    this.clipboardHistory = new ClipboardHistoryManager(sparkleDir);
     
     // IMPORTANT: Only allow access to Sparkle folder
     // Use expanded path for PathValidator
@@ -159,6 +182,26 @@ class SparkleMCPServer {
             description: "Check the health status of the Sparkle MCP server.",
             inputSchema: zodToJsonSchema(HealthCheckSchema),
           },
+          {
+            name: "search_clipboard",
+            description: "Search clipboard history in the Pasteboard folder with filters for date, content, and type.",
+            inputSchema: zodToJsonSchema(SearchClipboardSchema),
+          },
+          {
+            name: "get_clipboard_by_date",
+            description: "Get all clipboard entries for a specific date from the Pasteboard folder.",
+            inputSchema: zodToJsonSchema(GetClipboardByDateSchema),
+          },
+          {
+            name: "get_recent_clipboard",
+            description: "Get recent clipboard entries from the last N days.",
+            inputSchema: zodToJsonSchema(GetRecentClipboardSchema),
+          },
+          {
+            name: "clipboard_stats",
+            description: "Get statistics about clipboard usage and history.",
+            inputSchema: zodToJsonSchema(ClipboardStatsSchema),
+          },
         ],
       };
     });
@@ -187,6 +230,14 @@ class SparkleMCPServer {
           return await this.handleGetFileInfo(args);
         case "health_check":
           return await this.handleHealthCheck(args);
+        case "search_clipboard":
+          return await this.handleSearchClipboard(args);
+        case "get_clipboard_by_date":
+          return await this.handleGetClipboardByDate(args);
+        case "get_recent_clipboard":
+          return await this.handleGetRecentClipboard(args);
+        case "clipboard_stats":
+          return await this.handleClipboardStats(args);
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -682,7 +733,7 @@ Happy organizing!
   private async handleHealthCheck(args: any) {
     try {
       console.error("health_check: start");
-      const sparkleDir = this.expandPath(process.env.APP_ENV === 'dev' ? "~/Sparkle-Dev" : "~/Sparkle");
+      const sparkleDir = this.expandPath("~/Sparkle");
       const stats = await fs.stat(sparkleDir);
       
       const health = {
@@ -720,6 +771,114 @@ Happy organizing!
             error: error instanceof Error ? error.message : String(error),
             timestamp: new Date().toISOString(),
           }, null, 2),
+        }],
+        isError: true,
+      };
+    }
+  }
+
+  private async handleSearchClipboard(args: any) {
+    const { query, startDate, endDate, type, limit } = SearchClipboardSchema.parse(args);
+    
+    try {
+      console.error("search_clipboard: start");
+      
+      const searchOptions: any = { limit };
+      if (query) searchOptions.query = query;
+      if (startDate) searchOptions.startDate = new Date(startDate);
+      if (endDate) searchOptions.endDate = new Date(endDate);
+      if (type) searchOptions.type = type;
+      
+      const results = await this.clipboardHistory.searchClipboardHistory(searchOptions);
+      
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(results, null, 2),
+        }],
+      };
+    } catch (error) {
+      console.error("search_clipboard: error", error);
+      return {
+        content: [{
+          type: "text",
+          text: `Error searching clipboard: ${error instanceof Error ? error.message : String(error)}`,
+        }],
+        isError: true,
+      };
+    }
+  }
+
+  private async handleGetClipboardByDate(args: any) {
+    const { date } = GetClipboardByDateSchema.parse(args);
+    
+    try {
+      console.error(`get_clipboard_by_date: ${date}`);
+      
+      const result = await this.clipboardHistory.getClipboardByDate(new Date(date));
+      
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    } catch (error) {
+      console.error("get_clipboard_by_date: error", error);
+      return {
+        content: [{
+          type: "text",
+          text: `Error getting clipboard for date: ${error instanceof Error ? error.message : String(error)}`,
+        }],
+        isError: true,
+      };
+    }
+  }
+
+  private async handleGetRecentClipboard(args: any) {
+    const { days, limit } = GetRecentClipboardSchema.parse(args);
+    
+    try {
+      console.error(`get_recent_clipboard: ${days} days`);
+      
+      const results = await this.clipboardHistory.getRecentClipboard(days, limit);
+      
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(results, null, 2),
+        }],
+      };
+    } catch (error) {
+      console.error("get_recent_clipboard: error", error);
+      return {
+        content: [{
+          type: "text",
+          text: `Error getting recent clipboard: ${error instanceof Error ? error.message : String(error)}`,
+        }],
+        isError: true,
+      };
+    }
+  }
+
+  private async handleClipboardStats(args: any) {
+    try {
+      console.error("clipboard_stats: start");
+      
+      const stats = await this.clipboardHistory.getClipboardStats();
+      
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(stats, null, 2),
+        }],
+      };
+    } catch (error) {
+      console.error("clipboard_stats: error", error);
+      return {
+        content: [{
+          type: "text",
+          text: `Error getting clipboard stats: ${error instanceof Error ? error.message : String(error)}`,
         }],
         isError: true,
       };
