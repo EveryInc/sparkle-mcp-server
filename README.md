@@ -31,23 +31,41 @@ npm link
 
 ## Quick Setup
 
-1. **Install the server**:
-   ```bash
-   npm install -g @every-env/sparkle-mcp-server
-   ```
+### Option 1: Zero Install (Recommended) 🚀
 
-2. **Configure Claude Desktop** (add to `~/.config/claude/config.json`):
-   ```json
-   {
-     "mcpServers": {
-       "sparkle": {
-         "command": "sparkle-mcp"
-       }
-     }
-   }
-   ```
+Just add this to your Claude Desktop config (`~/.config/claude/config.json`):
 
-3. **Restart Claude Desktop** and start using Sparkle!
+```json
+{
+  "mcpServers": {
+    "sparkle": {
+      "command": "npx",
+      "args": ["-y", "@every-env/sparkle-mcp-server"]
+    }
+  }
+}
+```
+
+That's it! Restart Claude Desktop and you're done. No installation needed!
+
+### Option 2: Traditional Install
+
+If you prefer a local installation:
+
+```bash
+npm install -g @every-env/sparkle-mcp-server
+```
+
+Then use this config:
+```json
+{
+  "mcpServers": {
+    "sparkle": {
+      "command": "sparkle-mcp"
+    }
+  }
+}
+```
 
 ## Available Tools
 
