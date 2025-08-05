@@ -132,7 +132,7 @@ export class SparkleFolder {
     if (this.isTextFile(ext)) {
       try {
         const content = await fs.readFile(filePath, "utf-8");
-        metadata.content = content.slice(0, 5000); // First 5KB
+        metadata.content = content.slice(0, 50000); // First 50KB for indexing
         metadata.summary = this.generateSummary(content);
       } catch (error) {
         console.error(`Error reading ${filePath}:`, error);
@@ -235,6 +235,8 @@ export class SparkleFolder {
       await this.waitForIndex();
     }
 
+    console.error(`Finding relevant files for query: "${query}", fileIndex size: ${this.fileIndex.size}`);
+
     const queryEmbedding = await this.generateEmbedding({
       name: query,
       content: query,
@@ -258,6 +260,8 @@ export class SparkleFolder {
         metadata,
       });
     }
+
+    console.error(`Found ${results.length} results before sorting`);
 
     // Sort by relevance and return top results
     return results
@@ -336,5 +340,9 @@ export class SparkleFolder {
     if (this.watcher) {
       await this.watcher.close();
     }
+  }
+
+  public getFileCount(): number {
+    return this.fileIndex.size;
   }
 }

@@ -189,6 +189,13 @@ export class RateLimiter {
       }
     }
   }
+
+  public getRemainingRequests(identifier: string = 'default'): number {
+    const now = Date.now();
+    const requests = this.requests.get(identifier) || [];
+    const validRequests = requests.filter(time => now - time < this.windowMs);
+    return Math.max(0, this.maxRequests - validRequests.length);
+  }
 }
 
 // File type validator
